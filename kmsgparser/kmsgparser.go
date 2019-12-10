@@ -56,8 +56,28 @@ type Message struct {
 	Message        string
 }
 
-func NewParser() (Parser, error) {
-	f, err := os.Open("/dev/kmsg")
+type parserOptions struct {
+	openFlags int
+}
+
+// Option configures Parser.
+type Option func(*parserOptions)
+
+// NoFollow stops reading kmsg when there are now new messages in the buffer.
+func NoFollow() Option {
+	return func(o *parserOptions) {
+		o.openFlags |= syscall.O_NONBLOCK
+	}
+}
+
+func NewParser(options ...Option) (Parser, error) {
+	var o parserOptions
+
+	for _, opt := range options {
+		opt(&o)
+	}
+
+	f, err := os.OpenFile("/dev/kmsg", os.O_RDONLY|o.openFlags, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -131,6 +151,11 @@ func (p *parser) Parse() <-chan Message {
 				if err == syscall.EPIPE {
 					p.log.Warningf("short read from kmsg; skipping")
 					continue
+				}
+
+				if err == syscall.EAGAIN {
+					p.log.Infof("reached eof in non-blocking mode")
+					return
 				}
 
 				if err == io.EOF {
